@@ -1,0 +1,290 @@
+###
+ # Copyright 2011-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License").
+ # You may not use this file except in compliance with the License.
+ # A copy of the License is located at
+ #
+ #  http://aws.amazon.com/apache2.0
+ #
+ # or in the "license" file accompanying this file. This file is distributed
+ # on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ # express or implied. See the License for the specific language governing
+ # permissions and limitations under the License.
+ #
+# This script creates an ECS Cluster, Service, Task, ALB, Listener, Target Group
+# necessary to run xmlsigner container from ECR.
+# All the necessary roles and IAM Policies for services are also included.
+#
+# The final setup of the CloudHSM is done in Code Build (user creation)
+# Author: Luiz Decaro (lddecaro@amazon.com)
+AWSTemplateFormatVersion: 2010-09-09
+Description: A Stack that deploys the xmlsigner container in a Fargate Cluster. It will create the ECS service and Task and deploy the container
+Parameters:
+  HSMClusterId:
+    Type: String
+    Description: The CloudHSM Cluster Id
+    AllowedPattern: 'cluster-[a-z0-9]+'
+  SourceIpCIDR:
+    Type: String
+    Description: The IP address range in the format of X.X.X.X/Y where your requests to the API are going to be sourced from
+    Default: 0.0.0.0/0
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/\d{1,2}'
+Resources:
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: signer-cluster
+  EcsSecurityGroupIngressFromPublicALB:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !ImportValue SignerFargateContainerSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref PublicLoadBalancerSG
+  EcsSecurityGroupIngressFromSelf:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !ImportValue SignerFargateContainerSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !ImportValue SignerFargateContainerSecurityGroup
+  PublicLoadBalancerSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId: !ImportValue SignerVPCId
+      SecurityGroupIngress:
+        - CidrIp: !Ref SourceIpCIDR
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+  PublicLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: signer-pub-alb
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Subnets:
+        - !ImportValue SignerPublicSubnetOne
+        - !ImportValue SignerPublicSubnetTwo
+        - !ImportValue SignerPublicSubnetThree
+      SecurityGroups:
+        - !Ref PublicLoadBalancerSG
+  DummyTargetGroupPublic:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /xml/ping
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Name: signer-tg
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: ip
+      VpcId: !ImportValue SignerVPCId
+  PublicLoadBalancerListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    DependsOn: PublicLoadBalancer
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref DummyTargetGroupPublic
+          Type: forward
+      LoadBalancerArn: !Ref PublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+  ECSRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:AttachNetworkInterface'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:CreateNetworkInterfacePermission'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DeleteNetworkInterfacePermission'
+                  - 'ec2:Describe*'
+                  - 'ec2:DetachNetworkInterface'
+                  - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+                  - 'elasticloadbalancing:DeregisterTargets'
+                  - 'elasticloadbalancing:Describe*'
+                  - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+                  - 'elasticloadbalancing:RegisterTargets'
+                  - 'route53:ChangeResourceRecordSets'
+                  - 'route53:CreateHealthCheck'
+                  - 'route53:DeleteHealthCheck'
+                  - 'route53:Get*'
+                  - 'route53:List*'
+                  - 'route53:UpdateHealthCheck'
+                  - 'servicediscovery:DeregisterInstance'
+                  - 'servicediscovery:Get*'
+                  - 'servicediscovery:List*'
+                  - 'servicediscovery:RegisterInstance'
+                  - 'servicediscovery:UpdateInstanceCustomHealthStatus'
+                Resource: '*'
+  ECSTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:PutRetentionPolicy'
+                Resource: '*'
+  ECSTaskRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                Resource:
+                  - !Sub
+                    - arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:CloudHSM/${HSMClusterId}/*
+                    - ClusterId: !Ref HSMClusterId
+                  - !Sub
+                    - arn:aws:s3:::keystore-${ClusterId}/*
+                    - ClusterId: !Ref HSMClusterId
+              - Effect: Allow
+                Action: 'cloudhsm:DescribeClusters'
+                Resource: '*'
+  ECSTask:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      RequiresCompatibilities:
+        - EC2
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: signer
+          Image: !Sub
+            - '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}:latest'
+            - ECRRepoName: !ImportValue ECRRepositoryName
+          Essential: true
+          Environment:
+            - Name: region
+              Value: !Ref 'AWS::Region'
+            - Name: ClusterId
+              Value: !Ref HSMClusterId
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/xmlsigner
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: true
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+              Protocol: tcp
+      Family: xmlsigner
+      NetworkMode: awsvpc
+      Cpu: '2048'
+      Memory: '4096'
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+  ECSService:
+    Type: 'AWS::ECS::Service'
+    DependsOn: PublicLoadBalancerListener
+    Properties:
+      Cluster: !Ref ECSCluster
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 1
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 0
+      LoadBalancers:
+        - ContainerName: signer
+          ContainerPort: 8080
+          TargetGroupArn: !Ref DummyTargetGroupPublic
+      TaskDefinition: !Ref ECSTask
+      ServiceName: xmlsigner
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !ImportValue SignerFargateContainerSecurityGroup
+          Subnets:
+            - !ImportValue SignerPrivateSubnet
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: ClusterName
+  ExternalUrl:
+    Description: The url of the load balancer to access the service
+    Value: !Sub
+      - 'http://${LB_FQDN}'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName
+  ListKeysURL:
+    Description: This is the URL used to list the keys stored in the CloudHSM.
+    Value: !Sub
+      - 'http://${LB_FQDN}/xml/listKeys'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName
+  TestURL:
+    Description: This is the URL used for health check that can be used for testing purposes.
+    Value: !Sub
+      - 'http://${LB_FQDN}/xml/ping'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName
+  CreateKeysURL:
+    Description: This is the URL used for creating keys in the HSM. In the url you choose the label you want to use. No need to add header Content-Type
+    Value: !Sub 
+      - 'http://${LB_FQDN}/xml/create/{label}'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName
+  SignURL:
+    Description: This is the URL used for signing the XML Document. You send it in the body for signing and in the url you choose the label you want to use. Add header Content-Type application/xml
+    Value: !Sub
+      - 'http://${LB_FQDN}/xml/sign/{label}'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName
+  ValidateURL:
+    Description: This is the URL used for validating the XML Document. You send it in the body for validation. Add header Content-Type application/xml
+    Value: !Sub
+      - 'http://${LB_FQDN}/xml/validate/'
+      - LB_FQDN: !GetAtt PublicLoadBalancer.DNSName

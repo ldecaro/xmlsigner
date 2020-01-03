@@ -1,0 +1,8 @@
+{
+	"commonName": "A test common name",
+	"country": "A test country",
+	"city": "A test city",
+	"state": "A test state",
+	"organizationName": "A general organization",
+	"organizationUnit": "A test organization unit"
+}

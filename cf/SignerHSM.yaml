@@ -1,0 +1,602 @@
+###
+ # Copyright 2011-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License").
+ # You may not use this file except in compliance with the License.
+ # A copy of the License is located at
+ #
+ #  http://aws.amazon.com/apache2.0
+ #
+ # or in the "license" file accompanying this file. This file is distributed
+ # on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ # express or implied. See the License for the specific language governing
+ # permissions and limitations under the License.
+ #
+# This script creates a VPC, 3 Subnets (2 Public and 1 Private), Security Groups
+# for public subnets, security group for private subnet, EIP, NAT Gateway, private
+# and public route tables, Cloud HSM and initializes the CloudHSM Cluster using a
+# Step Function (Credits: initial version of the step function that was taken from
+# https://github.com/aws-samples/aws-reinvent2018-keeping-secrets).
+# All the necessary roles and IAM Policies for services are also included.
+#
+# The final setup of the CloudHSM is done in Code Build (user creation)
+# Author: Luiz Decaro (lddecaro@amazon.com)
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template to Create CloudHSMv2 Cluster and initialize it
+Parameters:
+  PrivateSubnetAZ:
+    Type: String
+    Default: AZ1
+    AllowedValues:
+      - AZ1
+      - AZ2
+      - AZ3
+    Description: The Availability Zone for the Private Subnet where the CloudHSM is going to be connected to
+  CIDRNetworkHSM:
+    Type: String
+    Default: 172.30.0.0/16
+    Description: The network CIDR of the HSM Network where this public subnet will be created
+  CIDRPublicSubnetHSM:
+    Type: String
+    Default: 172.30.255.0/24
+    Description: The CIDR of the first public subnet where the container and ALB will be running
+  CIDRPublicSubnet2HSM: 
+    Type: String 
+    Default: 172.30.254.0/24 
+    Description: The CIDR of the second public subnet where the container and ALB will be running 
+  CIDRPublicSubnet3HSM: 
+    Type: String 
+    Default: 172.30.253.0/24 
+    Description: The CIDR of the second public subnet where the container and ALB will be running 
+  CIDRPrivateSubnetHSM:
+    Type: String
+    Default: 172.30.240.0/24
+    Description: Private subnet where Code Build will run
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref CIDRNetworkHSM
+      Tags:
+        - Key: Name
+          Value: signer
+  PublicSubnetOne:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select
+       - 0
+       - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPublicSubnetHSM
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: signer-public
+  PublicSubnetTwo: 
+    Type: 'AWS::EC2::Subnet' 
+    Properties: 
+      AvailabilityZone: !Select
+       - 1
+       - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC 
+      CidrBlock: !Ref CIDRPublicSubnet2HSM 
+      MapPublicIpOnLaunch: true 
+      Tags:
+        - Key: Name
+          Value: signer-public2
+  PublicSubnetThree: 
+    Type: 'AWS::EC2::Subnet' 
+    Properties: 
+      AvailabilityZone: !Select
+       - 2
+       - Fn::GetAZs: !Ref 'AWS::Region'
+      VpcId: !Ref VPC 
+      CidrBlock: !Ref CIDRPublicSubnet3HSM 
+      MapPublicIpOnLaunch: true 
+      Tags:
+        - Key: Name
+          Value: signer-public3
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPrivateSubnetHSM
+      Tags:
+        - Key: Name
+          Value: signer-priv
+      AvailabilityZone: !FindInMap [RegionMap, !Ref "AWS::Region", !Ref PrivateSubnetAZ]
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+  GatewayAttachement:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-private
+  PublicAccessRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: NATGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+  PrivateSubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-public      
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn:
+      - GatewayAttachement
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetOneRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetTwoRouteTableAssociation: 
+    Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+    Properties: 
+      SubnetId: !Ref PublicSubnetTwo 
+      RouteTableId: !Ref PublicRouteTable 
+  PublicSubnetThreeRouteTableAssociation: 
+    Type: 'AWS::EC2::SubnetRouteTableAssociation' 
+    Properties: 
+      SubnetId: !Ref PublicSubnetThree
+      RouteTableId: !Ref PublicRouteTable 
+  FargateContainerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the Fargate containers
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: signer-ecs-sg
+  NATGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: signer-private     
+      AllocationId:
+        'Fn::GetAtt':
+          - EIP
+          - AllocationId
+      SubnetId: !Ref PublicSubnetOne
+  EIP:
+    DependsOn: GatewayAttachement
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+  #Cloud HSM Installation
+  LambdaExecutionRoleForCloudHSM:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: CloudhsmPowerUser
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'cloudhsm:DescribeClusters'
+                  - 'cloudhsm:CreateCluster'
+                  - 'cloudhsm:CreateHsm'
+                  - 'cloudhsm:InitializeCluster'
+                  - 'cloudhsm:ListTags'
+                  - 'cloudhsm:TagResource'
+                  - 'cloudhsm:UntagResource'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DescribeNetworkInterfaceAttribute'
+                  - 'ec2:DetachNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:CreateSecurityGroup'
+                  - 'ec2:AuthorizeSecurityGroupIngress'
+                  - 'ec2:AuthorizeSecurityGroupEgress'
+                  - 'ec2:RevokeSecurityGroupEgress'
+                  - 'ec2:DescribeSecurityGroups'
+                  - 'ec2:DeleteSecurityGroup'
+                  - 'ec2:CreateTags'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:DescribeSubnets'
+                  - 'states:StartExecution'
+                  - 'iam:CreateServiceLinkedRole'
+                  - 'ssm:PutParameter'
+                  - 'ssm:SendCommand'
+                Resource: '*'
+  CreateCluster:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+            """" Lambda to Create CloudHSMv2 Cluster """
+            import boto3, json, time
+
+            def lambda_handler(event, context):
+                region = event['Region']  # region to launch Cluster #
+                subnet1 = event['Subnet1']
+                sg_b = event['SG']
+
+                cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+                cluster = cloudhsmv2.create_cluster(SubnetIds=[subnet1],HsmType='hsm1.medium')
+                print("New Cluster created.")
+                cluster_id = cluster['Cluster']['ClusterId']
+                print(cluster_id)
+
+                time.sleep(15)
+
+                ec2 = boto3.client('ec2', region_name=region)
+                sg = ec2.describe_security_groups(Filters=[
+                    {
+                        'Name': 'egress.ip-permission.from-port',
+                        'Values': [
+                            '2223',
+                        ]
+                    },
+                ])
+                for securityGroup in sg['SecurityGroups']:
+                    print("Adding CloudHSM permissions to SG: %s" % securityGroup['GroupId'])
+                    try:
+                        result = ec2.authorize_security_group_ingress(GroupId=securityGroup['GroupId'],IpPermissions=[{'IpProtocol': 'tcp','FromPort': 2223, 'ToPort': 2225, 'UserIdGroupPairs': [{ 'GroupId': sg_b }]}])
+                        print("SG update result: ", result)
+                    except:
+                        pass
+                return cluster_id
+      Runtime: python3.6
+      Timeout: 300
+  DescribeClusters:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+          """" Lambda to Check CloudHSMv2 Cluster status """
+          import boto3, json
+          def lambda_handler(event, context):
+              region = event['Region']  
+              clusterId = event['Cluster_Id']
+              cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+              try:
+                  # Call Describe Cluster
+                  cluster_data = cloudhsmv2.describe_clusters(Filters={'clusterIds': [clusterId]})
+                  cluster_status = cluster_data['Clusters'][0]['State']
+                  availablity_zones = list(cluster_data['Clusters'][0]['SubnetMapping'].keys())
+                  security_group = cluster_data['Clusters'][0]['SecurityGroup']
+                  
+                  #Check if there HSM in the cluster to json parsing error
+                  hsms = cluster_data['Clusters'][0]['Hsms']
+                  if not hsms:
+                      hsm_status = 'None'
+                      hsm_ip = 'None'
+                  else:
+                      print(hsms)
+                      hsm0 = cluster_data['Clusters'][0]['Hsms'][0]
+                      hsm_status = hsm0.get('State')
+                      hsm_ip = hsm0.get('EniIp')
+                      
+                  # Log response from Cluster
+                  print("Cluster Status: %s" % cluster_status)
+                  print("AZ1: %s" % availablity_zones[0])
+                  print("Cluster Security Group: %s" % security_group)
+                  print("HSM IP: %s" % hsm_ip)
+                  print("HSM Status: %s" % hsm_status)
+                  
+                  # Return the Status
+                  return {'Cluster_Id': clusterId, 'Cluster_Status' : cluster_status, 'Hsm_Status' : hsm_status, 'AZ1':availablity_zones[0], 'Hsm_Ip' : hsm_ip, 'Security_Group': security_group}
+              except Exception as e:
+                  print(e)
+                  message = 'Error getting Cluster Status'
+                  print(message)
+                  raise Exception(message)
+      Runtime: python3.6
+      Timeout: 3
+  CreateHSM:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Code:
+        ZipFile: |
+          """" Lambda to Create CloudHSMv2 Cluster """
+          import boto3, json
+
+          def lambda_handler(event, context):
+              region = event['Region']
+              clusterId = event['Cluster_Id']
+              AZ1 = event['Cluster_Output']['AZ1']
+
+              cloudhsmv2 = boto3.client('cloudhsmv2', region_name=region)
+              hsm_id = (cloudhsmv2.create_hsm(ClusterId=clusterId,AvailabilityZone=AZ1))['Hsm']['HsmId']
+              print("New HSM " + hsm_id + " created")
+              hsm_status = (cloudhsmv2.describe_clusters(Filters={'clusterIds': [clusterId]}))['Clusters'][0]['Hsms'][0]['State']
+              print(hsm_status)
+
+              return hsm_status
+      Runtime: python3.6
+      Timeout: 3
+  ExecuteStepfunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Runtime: python3.6
+      Handler: index.handler
+      Role: !GetAtt
+        - LambdaExecutionRoleForCloudHSM
+        - Arn
+      Timeout: 50
+      Code:
+        ZipFile: |
+          import boto3, json, traceback, time
+          import cfnresponse
+          import logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              response_data = {}
+              try:
+                  client = boto3.client('stepfunctions', region_name=event['ResourceProperties']["StateRegions"])
+                  if event["RequestType"] == "Create" or event["RequestType"] == "Update":
+                      logger.info("Event Body - " + json.dumps(event))
+
+                      SecretsMgrSubnet01 = event['ResourceProperties']['SecretsMgrSubnet01Id']
+                      SG    =   event['ResourceProperties']['SG']
+
+                      executestate = event['ResourceProperties']['ExecuteStateArn']
+                      Region = event['ResourceProperties']["StateRegions"]
+                      StateArn = client.start_execution(
+                          stateMachineArn=executestate,
+                          input="{\"Region\":\"" + Region + "\",\"Subnet1\":\""+ SecretsMgrSubnet01 + "\",\"SG\":\"" +SG+"\"}"
+                          )['executionArn']
+
+                      logger.info("executionArn - " + StateArn)
+                      response_data['executeArn'] = StateArn
+
+                      logger.info("Response - " + json.dumps(response_data))
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, StateArn)
+
+                  elif event["RequestType"] == "Delete":
+                      logger.info("Event Body - " + json.dumps(event))
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,{})
+                  else:
+                      logger.info("Event Body - " + json.dumps(event))
+                      cfnresponse.send(event, context, cfnresponse.FAILED,{})
+              except Exception as e:
+                  msg = 'See details in CloudWatch Log Stream: ' + context.log_stream_name
+                  response_data['exception'] = str(e)[0:255] + '... ' + msg
+                  cfnresponse.send(event, context, cfnresponse.FAILED, response_data)
+  ExecuteStepCustom:
+    Type: 'Custom::ExecuteStepCustom'
+    Properties:
+      ServiceToken: !GetAtt
+        - ExecuteStepfunction
+        - Arn
+      StateRegions: !Ref 'AWS::Region'
+      ExecuteStateArn: !Ref LaunchCloudHSMCluster
+      SecretsMgrSubnet01Id: !Ref PrivateSubnet
+      SG: !Ref FargateContainerSecurityGroup
+    DependsOn:
+      - NATGateway
+      - PublicAccessRoute
+  StatesExecutionRoleForCloudHSM:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'lambda:InvokeFunction'
+                Resource: '*'
+  LaunchCloudHSMCluster:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub |-
+        {
+          "Comment": "Creates a CloudHSM and initializes it",
+          "StartAt": "CreateCluster",
+          "States": {
+            "CreateCluster": {
+              "Type": "Task",
+              "Resource": "${CreateCluster.Arn}",
+              "Next": "wait_cluster_seconds",
+              "ResultPath": "$.Cluster_Id"
+            },
+            "wait_cluster_seconds": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "ClusterStatus"
+            },
+            "ClusterStatus": {
+              "Type": "Task",
+              "Resource": "${DescribeClusters.Arn}",
+              "Next": "ClusterReady?",
+              "ResultPath": "$.Cluster_Output"
+            },
+            "ClusterReady?": {
+              "Type": "Choice",
+              "Choices": [{
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "UNINITIALIZED",
+                "Next": "CreateHSM"
+              }, {
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "INITIALIZED",
+                "Next": "SuccessState"
+              },{
+                "Variable": "$.Cluster_Output.Cluster_Status",
+                "StringEquals": "DEGRADED",
+                "Next": "Job Failed"
+              }
+            ],
+              "Default": "wait_cluster_seconds"
+            },
+            "Job Failed": {
+              "Type": "Fail",
+              "Cause": "Create Cluster Failed",
+              "Error": "Cluster failed to start in a healthy state"
+            },
+            "CreateHSM": {
+              "Type": "Task",
+              "Resource": "${CreateHSM.Arn}",
+              "Next": "wait_hsm_seconds",
+              "ResultPath": "$.Cluster_Output.Hsm_Status"
+            },
+            "wait_hsm_seconds": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "HsmStatus"
+            },
+            "HsmStatus": {
+              "Type": "Task",
+              "Resource": "${DescribeClusters.Arn}",
+              "Next": "HsmActive?",
+              "ResultPath": "$.Cluster_Output"
+            },
+            "HsmActive?": {
+              "Type": "Choice",
+              "Choices": [{
+                "Variable": "$.Cluster_Output.Hsm_Status",
+                "StringEquals": "ACTIVE",
+                "Next": "SuccessState"
+              }, {
+                "Variable": "$.Cluster_Output.Hsm_Status",
+                "StringEquals": "DEGRADED",
+                "Next": "Job Failed"
+              }],
+              "Default": "wait_hsm_seconds"
+            },
+            "SuccessState": {
+                "Type": "Succeed"
+              }
+          }
+        }
+      RoleArn: !GetAtt StatesExecutionRoleForCloudHSM.Arn
+Outputs:
+  VPCId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref VPC
+    Export:
+      Name: SignerVPCId
+  PublicSubnetOne:
+    Description: Public subnet one
+    Value: !Ref PublicSubnetOne
+    Export:
+      Name: SignerPublicSubnetOne
+  PrivateSubnet:
+    Description: Private Subnet
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: SignerPrivateSubnet
+  PublicSubnetOneAz:
+    Description: Public subnet one AZ
+    Value: !GetAtt PublicSubnetOne.AvailabilityZone
+    Export:
+      Name: SignerPublicSubnetOneAz          
+  PrivateSubnetAz:
+    Description: Private Subnet AZ
+    Value: !GetAtt PrivateSubnet.AvailabilityZone
+    Export:
+      Name: SignerPrivateSubnetAz 
+  PublicSubnetTwo: 
+    Description: Public subnet two 
+    Value: !Ref PublicSubnetTwo 
+    Export: 
+      Name: SignerPublicSubnetTwo 
+  PublicSubnetTwoAz: 
+    Description: Public subnet two AZ 
+    Value: !GetAtt PublicSubnetTwo.AvailabilityZone 
+    Export: 
+      Name: PublicSubnetTwoAz            
+  PublicSubnetThree: 
+    Description: Public subnet three
+    Value: !Ref PublicSubnetThree
+    Export: 
+      Name: SignerPublicSubnetThree
+  PublicSubnetThreeAz: 
+    Description: Public subnet three AZ 
+    Value: !GetAtt PublicSubnetThree.AvailabilityZone 
+    Export: 
+      Name: PublicSubnetThreeAz            
+  FargateContainerSecurityGroup:
+    Description: A security group used to allow Fargate containers to receive traffic
+    Value: !Ref FargateContainerSecurityGroup
+    Export:
+      Name: SignerFargateContainerSecurityGroup
+  executionARN:
+    Description: The ARN of the execution
+    Value: !GetAtt
+      - ExecuteStepCustom
+      - executeArn      
+Mappings:
+  RegionMap:
+    us-east-1:
+      AZ1: 'us-east-1a'
+      AZ2: 'us-east-1b'
+      AZ3: 'us-east-1c'
+    us-east-2:
+      AZ1: 'us-east-2a'
+      AZ2: 'us-east-2b'
+      AZ3: 'us-east-2c'
+    us-west-2:
+      AZ1: 'us-west-2a'
+      AZ2: 'us-west-2b'
+      AZ3: 'us-west-2c'
+    sa-east-1:
+      AZ1: 'sa-east-1a'
+      AZ2: 'sa-east-1b'
+      AZ3: 'sa-east-1c'

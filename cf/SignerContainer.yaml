@@ -1,0 +1,175 @@
+###
+ # Copyright 2011-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License").
+ # You may not use this file except in compliance with the License.
+ # A copy of the License is located at
+ #
+ #  http://aws.amazon.com/apache2.0
+ #
+ # or in the "license" file accompanying this file. This file is distributed
+ # on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ # express or implied. See the License for the specific language governing
+ # permissions and limitations under the License.
+ #
+# This script builds the xmlsigner container and configures the CloudHSM users
+# necessary for executing the basic operations. ALB uses three public subnets. 
+#
+# All the necessary roles and IAM Policies for services are also included.
+#
+# The final setup of the CloudHSM is done in Code Build (user creation)
+# Author: Luiz Decaro (lddecaro@amazon.com)
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  ECRRepositoryName:
+    Type: String
+    Description: The name of your ECR Repository
+    Default: xmlsigner
+  HSMClusterId:
+    Type: String
+    Description: The CloudHSM Cluster Id
+    AllowedPattern: "cluster-[a-z0-9]+"
+  HSMUser:
+    Type: String
+    Description: The user of your HSM. Your service will authenticate in the HSM using this username
+    Default: api_user
+  HSMPassword:
+    Type: String
+    Description: The password of your HSM. Your service will authenticate in the HSM using this credential
+    NoEcho: true
+Resources:
+  KeyStoreBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join ['', ['keystore-', !Ref HSMClusterId]]
+      VersioningConfiguration:
+        Status: Enabled
+  HSMCredentials:
+    Type: 'AWS::SecretsManager::Secret'
+    Properties: 
+      Description: CloudHSM Credentials
+      Name: !Sub
+        - CloudHSM/${ClusterId}/credentials
+        - ClusterId: !Ref HSMClusterId
+      SecretString: !Sub
+        - '{"HSM_USER": "${HsmUser}","HSM_PASSWORD": "${HsmPassword}"}'
+        - HsmUser: !Ref HSMUser
+          HsmPassword: !Ref HSMPassword
+  XMLSignerBuild:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Description: This is the sample build process of the xmlsigner project
+      Name: xmlsigner
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: true
+        Image: 'aws/codebuild/amazonlinux2-x86_64-standard:1.0-1.0.0'
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: HSM_CLUSTER_ID
+            Value: !Ref HSMClusterId
+            Type: PLAINTEXT
+          - Name: REPOSITORY_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/'
+            Type: PLAINTEXT
+          - Name: REPOSITORY_NAME
+            Value: !Ref XMLSignerRepository
+            Type: PLAINTEXT
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+      VpcConfig:
+        VpcId: !ImportValue SignerVPCId
+        Subnets:
+          - !ImportValue SignerPrivateSubnet
+        SecurityGroupIds:
+          - !ImportValue SignerFargateContainerSecurityGroup
+      QueuedTimeoutInMinutes: 480
+      Source:
+        Auth:
+          Type: OAUTH
+        GitCloneDepth: 0
+        Type: GITHUB
+        Location: 'https://github.com/ldecaro/xmlsigner'
+        InsecureSsl: false
+        ReportBuildStatus: false
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join
+                  - "" 
+                  - - 'XMLSignerCodeBuildRole-'
+                    - !Ref HSMClusterId
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /service-role/
+      Policies:
+        - PolicyName: XMLSignerCodeBuildPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeDhcpOptions'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeSubnets'
+                  - 'ec2:DescribeSecurityGroups'
+                  - 'ec2:DescribeVpcs'
+                  - 'ecr:GetAuthorizationToken'
+                  - 'cloudhsm:DescribeClusters'
+                  - 'cloudhsm:InitializeCluster'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/xmlsigner
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/xmlsigner:*
+              - Effect: Allow
+                Action: 
+                  - 'ssm:PutParameter'
+                  - 'ssm:GetParameter'
+                Resource:
+                  - !Sub
+                    - arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ClusterId}/CodeBuild/*
+                    - ClusterId: !Ref HSMClusterId
+              - Effect: Allow
+                Action: 'ec2:CreateNetworkInterfacePermission'
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+              - Effect: Allow
+                Action:
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:PutImage'
+                  - 'ecr:InitiateLayerUpload'
+                  - 'ecr:UploadLayerPart'
+                  - 'ecr:CompleteLayerUpload'
+                Resource: !GetAtt XMLSignerRepository.Arn
+              - Effect: Allow
+                Action: 'secretsmanager:GetSecretValue'
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*
+  XMLSignerRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: !Ref ECRRepositoryName
+Outputs:
+   ECRRepositoryName:
+      Description: ECR Repository to build this container
+      Value: !Ref ECRRepositoryName
+      Export:
+        Name: ECRRepositoryName

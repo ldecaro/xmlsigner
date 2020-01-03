@@ -1,0 +1,641 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  A stack for deploying containerized applications in AWS Fargate. This stack
+  runs containers in a public VPC subnet, and includes a public facing load
+  balancer to register the services in.
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: 10.0.0.0/16
+    PublicOne:
+      CIDR: 10.0.0.0/24
+    PublicTwo:
+      CIDR: 10.0.1.0/24
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref CIDRNetworkHSM
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+  PublicSubnetOne:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        'Fn::Select':
+          - 0
+          - 'Fn::GetAZs':
+              Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPublicSubnetHSM
+      MapPublicIpOnLaunch: true
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+  PublicSubnetTwo:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone:
+        'Fn::Select':
+          - 1
+          - 'Fn::GetAZs':
+              Ref: 'AWS::Region'
+      VpcId: !Ref VPC
+      CidrBlock: !Ref CIDRPublicSubnet2HSM
+      MapPublicIpOnLaunch: true
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ad635758-84b6-45bc-8dac-9b955595f2d3
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+  GatewayAttachement:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 48950cdd-dbe4-4611-996d-2af3cce33d27
+  PublicSubnetOneRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 565851de-a56b-4ef3-b8ba-00c2e4610bb0
+  PublicSubnetTwoRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref PublicRouteTable
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 776dc5b7-ee14-450a-9336-7750acbfa484
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: bc4e86af-eba9-4855-a66a-4d5c94e6b04a
+  FargateContainerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the Fargate containers
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+  EcsSecurityGroupIngressFromPublicALB:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !Ref FargateContainerSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref PublicLoadBalancerSG
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: a05c3c07-4cb0-4668-b1d5-339a6f58e82e
+  EcsSecurityGroupIngressFromSelf:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !Ref FargateContainerSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref FargateContainerSecurityGroup
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 693bfb2c-0477-468b-aacc-6eb9e26b9fc1
+  PublicLoadBalancerSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 916b51ff-d56a-4fe4-85db-417344037c3e
+  PublicLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: XMLSigner-PublicALB
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Subnets:
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+      SecurityGroups:
+        - !Ref PublicLoadBalancerSG
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 03826ee0-8d66-457e-8202-a52cfb02db77
+  DummyTargetGroupPublic:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /xml/ping
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Name: !Join 
+        - '-'
+        - - XMLSigner
+          - TG-1
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: ip
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: f15849db-c6c8-4f71-8e5d-072c46d98c74
+  PublicLoadBalancerListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref DummyTargetGroupPublic
+          Type: forward
+      LoadBalancerArn: !Ref PublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 47ab314d-807d-413a-b859-f8c0776e26db
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - ClusterName
+  ExternalUrl:
+    Description: The url of the external load balancer
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !GetAtt PublicLoadBalancer.DNSName
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - ExternalUrl
+  PublicListener:
+    Description: The ARN of the public load balancer's Listener
+    Value: !Ref PublicLoadBalancerListener
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - PublicListener
+  VPCId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref VPC
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - VPCId
+  PublicSubnetOne:
+    Description: Public subnet one
+    Value: !Ref PublicSubnetOne
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - PublicSubnetOne
+  PublicSubnetTwo:
+    Description: Public subnet two
+    Value: !Ref PublicSubnetTwo
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - PublicSubnetTwo
+  FargateContainerSecurityGroup:
+    Description: A security group used to allow Fargate containers to receive traffic
+    Value: !Ref FargateContainerSecurityGroup
+    Export:
+      Name: !Join 
+        - ':'
+        - - !Ref 'AWS::StackName'
+          - FargateContainerSecurityGroup
+Metadata:
+  'AWS::CloudFormation::Designer':
+    bc4e86af-eba9-4855-a66a-4d5c94e6b04a:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 300
+        'y': 750
+      z: 1
+      embeds: []
+    3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 420
+        'y': 750
+      z: 1
+      embeds: []
+    ff1b3762-07b2-470d-88ac-dcf1f46c5bb4:
+      size:
+        width: 690
+        height: 600
+      position:
+        x: 60
+        'y': 90
+      z: 1
+      embeds:
+        - f15849db-c6c8-4f71-8e5d-072c46d98c74
+        - 916b51ff-d56a-4fe4-85db-417344037c3e
+        - 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - ad635758-84b6-45bc-8dac-9b955595f2d3
+        - bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+    f15849db-c6c8-4f71-8e5d-072c46d98c74:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 90
+        'y': 460
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    916b51ff-d56a-4fe4-85db-417344037c3e:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 210
+        'y': 450
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    15e77198-7be1-4800-bde2-9fbb5dfe30dc:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 600
+        'y': 150
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    693bfb2c-0477-468b-aacc-6eb9e26b9fc1:
+      source:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      target:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      z: 2
+    a05c3c07-4cb0-4668-b1d5-339a6f58e82e:
+      source:
+        id: 916b51ff-d56a-4fe4-85db-417344037c3e
+      target:
+        id: 15e77198-7be1-4800-bde2-9fbb5dfe30dc
+      z: 2
+    857c6b84-8319-406f-8f39-d23f02b0576f:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: 90
+        'y': 150
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds:
+        - 48950cdd-dbe4-4611-996d-2af3cce33d27
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    d1516997-cc1e-4d41-ac4a-9d756f9dfa71:
+      source:
+        id: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      target:
+        id: 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+      z: 1
+    48950cdd-dbe4-4611-996d-2af3cce33d27:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 120
+        'y': 210
+      z: 3
+      parent: 857c6b84-8319-406f-8f39-d23f02b0576f
+      embeds: []
+      isassociatedwith:
+        - 3837cbcf-4d68-48be-bc9a-9d1fe7d62b2f
+      iscontainedinside:
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+        - 857c6b84-8319-406f-8f39-d23f02b0576f
+      dependson:
+        - d1516997-cc1e-4d41-ac4a-9d756f9dfa71
+    ad635758-84b6-45bc-8dac-9b955595f2d3:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 390
+        'y': 360
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    776dc5b7-ee14-450a-9336-7750acbfa484:
+      source:
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+      target:
+        id: ad635758-84b6-45bc-8dac-9b955595f2d3
+      z: 2
+    bdf5413a-9d2e-4ac3-96db-457c7cd67da2:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 390
+        'y': 150
+      z: 2
+      parent: ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+      embeds: []
+      iscontainedinside:
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+        - ff1b3762-07b2-470d-88ac-dcf1f46c5bb4
+    03826ee0-8d66-457e-8202-a52cfb02db77:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 540
+        'y': 750
+      z: 1
+      embeds: []
+      isassociatedwith:
+        - 916b51ff-d56a-4fe4-85db-417344037c3e
+      iscontainedinside:
+        - bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+        - ad635758-84b6-45bc-8dac-9b955595f2d3
+    47ab314d-807d-413a-b859-f8c0776e26db:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 660
+        'y': 750
+      z: 1
+      embeds: []
+      dependson:
+        - 03826ee0-8d66-457e-8202-a52cfb02db77
+    565851de-a56b-4ef3-b8ba-00c2e4610bb0:
+      source:
+        id: 857c6b84-8319-406f-8f39-d23f02b0576f
+      target:
+        id: bdf5413a-9d2e-4ac3-96db-457c7cd67da2
+      z: 2
+Parameters:
+  CIDRNetworkHSM:
+    Type: String
+    Default: 172.30.0.0/16
+    Description: >-
+      The network CIDR of the HSM Network where this public subnet will be
+      created
+  CIDRPublicSubnetHSM:
+    Type: String
+    Default: 172.30.255.0/24
+    Description: >-
+      The CIDR of the first public subnet where the container and ALB will be
+      running
+  CIDRPublicSubnet2HSM:
+    Type: String
+    Default: 172.30.248.0/24
+    Description: >-
+      The CIDR of the second public subnet where the container and ALB will be
+      running
+  ECRRepositoryName:
+    Type: String
+    Description: The ECR Repository name where the xmlsigner image is

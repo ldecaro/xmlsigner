@@ -1,0 +1,110 @@
+version: 0.2
+
+env: 
+  variables:
+    version: "1.0-SNAPSHOT" #pass this to the maven command and dinamically change project version
+phases:
+  install:
+    runtime-versions:
+      java: corretto8
+    commands:
+      - rpm --eval '%{centos_ver}'
+      - java -version
+      - echo [INFO] Downloading AWS CloudHSM tools and libraries
+      - wget --no-verbose https://s3.amazonaws.com/cloudhsmv2-software/CloudHsmClient/EL7/cloudhsm-client-latest.el7.x86_64.rpm
+      - wget --no-verbose https://s3.amazonaws.com/cloudhsmv2-software/CloudHsmClient/EL7/cloudhsm-client-jce-latest.el7.x86_64.rpm
+      - yum install -q -y maven openssl ./cloudhsm-client-latest.el7.x86_64.rpm ./cloudhsm-client-jce-latest.el7.x86_64.rpm
+      - export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64
+      - echo [INFO] HSM Certificate Setup...
+      - chmod a+x setupHSM.sh
+      - ./setupHSM.sh $HSM_CLUSTER_ID $AWS_DEFAULT_REGION
+      - echo [INFO] Configuring local HSM Client
+      - echo [INFO] Copying the certificate file to the local client
+      - cp /tmp/customerCA.crt /opt/cloudhsm/etc/customerCA.crt
+      - echo [INFO] Certificate File
+      - cat /opt/cloudhsm/etc/customerCA.crt
+      - export HSM_IP=`aws cloudhsmv2 describe-clusters --region $AWS_DEFAULT_REGION --filter clusterIds=$HSM_CLUSTER_ID --query "Clusters[0].Hsms[0].EniIp" --output text`
+      - echo [INFO] The CloudHSM IP address is $HSM_IP
+      - /opt/cloudhsm/bin/configure -a $HSM_IP
+      - /opt/cloudhsm/bin/cloudhsm_client /opt/cloudhsm/etc/cloudhsm_client.cfg >> /dev/null &
+      - export HSM_CREDENTIALS=`aws secretsmanager get-secret-value --secret-id CloudHSM/$HSM_CLUSTER_ID/credentials --region $AWS_DEFAULT_REGION --query "SecretString" --output text`
+      - export HSM_USER=`echo $HSM_CREDENTIALS | jq ".HSM_USER" -r`
+      - export HSM_PASSWORD=`echo $HSM_CREDENTIALS | jq ".HSM_PASSWORD" -r`
+      - |
+        if [ -z "$HSM_USER" ] || [ -z "$HSM_PASSWORD" ]; then
+          echo [ERROR] Could not retrieve CloudHSM credentials
+          exit 1
+        else
+          echo [INFO] Successfully imported CloudHSM credentials
+        fi
+      - echo [INFO] Checking HSM Crypto Officer activation
+      - STATUS=`aws cloudhsmv2 describe-clusters --filter clusterIds=$HSM_CLUSTER_ID --region $AWS_DEFAULT_REGION --query 'Clusters[0].State' --output text`
+      - echo [INFO] CloudHSM Status is $STATUS
+      - |
+        if [ "$STATUS" = "INITIALIZED" ]; then
+          echo [INFO] Will setup HSM Crypto Officer
+          chmod a+x initializeHSM.sh
+          ./initializeHSM.sh $HSM_PASSWORD &
+          STATUS=`aws cloudhsmv2 describe-clusters --filter clusterIds=$HSM_CLUSTER_ID --region $AWS_DEFAULT_REGION --query 'Clusters[0].State' --output text`
+          while [ "$STATUS" != "ACTIVE" ]; do
+            echo [INFO] Waiting for CO credentials setup to activate cluster. Current Status: $STATUS
+            sleep 5
+            STATUS=`aws cloudhsmv2 describe-clusters --filter clusterIds=$HSM_CLUSTER_ID --region $AWS_DEFAULT_REGION --query 'Clusters[0].State' --output text`
+          done
+        fi
+      - echo [INFO] Checking HSM user creation status
+      - chmod a+x listHSMusers.sh
+      - ./listHSMusers.sh
+      - HSM_USERS_LIST=`cat /tmp/hsm_users.out`
+      - echo $HSM_USERS_LIST
+      - REGEXP="CU[[:space:]]+$HSM_USER"
+      - |
+        if [[ $HSM_USERS_LIST =~ $REGEXP ]]; then
+            echo [INFO] HSM Crypto User already created
+        else
+            echo [INFO] Creating HSM Crypto User
+            chmod a+x addHSMUser.sh
+            ./addHSMUser.sh $HSM_USER $HSM_PASSWORD &
+        fi
+      - sleep 3
+      - HSM_USERS_LIST=`/opt/cloudhsm/bin/key_mgmt_util singlecmd loginHSM -u CU -s $HSM_USER -p $HSM_PASSWORD listUsers`
+      - echo $HSM_USERS_LIST
+  pre_build:
+    commands:
+      - echo [INFO] Logging in to Amazon ECR
+      - aws --version
+      - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+      - set IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Installing HSM Java Libraries Locally
+      - mvn --batch-mode -Paws-codebuild validate | egrep -v 'Download(ing|ed):'
+      - echo Copying the certificate file to the container...
+      - cp /opt/cloudhsm/etc/customerCA.crt ./resources
+      - echo Building the HSM XML Signer Project
+      - mvn --batch-mode -Paws-codebuild clean package | egrep -v 'Download(ing|ed):'
+      - echo Building the Docker image...       
+      - echo $REPOSITORY_URI$REPOSITORY_NAME:latest
+      - docker build --build-arg HSM_IP=$HSM_IP -t $REPOSITORY_URI$REPOSITORY_NAME:latest .
+      - docker tag $REPOSITORY_URI$REPOSITORY_NAME:latest $REPOSITORY_URI$REPOSITORY_NAME:$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Checking HSM user successful creation
+      - HSM_USERS_LIST=`/opt/cloudhsm/bin/key_mgmt_util singlecmd loginHSM -u CU -s $HSM_USER -p $HSM_PASSWORD listUsers`
+      - echo $HSM_USERS_LIST
+      - REGEXP="CU[[:space:]]+$HSM_USER"
+      - if [[ $HSM_USERS_LIST =~ $REGEXP ]]; then echo "HSM user created successfully"; else echo "Error creating HSM user"; exit 1; fi
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI$REPOSITORY_NAME:latest
+      - docker push $REPOSITORY_URI$REPOSITORY_NAME:$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - echo Writing image definitions file...
+      - printf '[{"name":"signer","imageUri":"%s"}]' "$REPOSITORY_URI$REPOSITORY_NAME:$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)" > imagedefinitions.json
+      - cat imagedefinitions.json
+artifacts:
+  files:
+    - target/signer-1.0-SNAPSHOT.jar
+    - imagedefinitions.json
+  discard-paths: yes
+
