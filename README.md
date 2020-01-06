@@ -2,6 +2,8 @@
 
 # Signer Microservice - Digital Invoice Signing
 
+Em [Português](README_pt_BR.md)
+
 A microservice for signing digital invoices created using the XML format. This microservice is also able to digitaly sign any XML document. In payment industries, more specifically in Brazil, law requires all invoices to be created in digital format (XML) and to be digitally signed before sent to customers. An example is the NF-e or Nota Fiscal Eletrônica.
 
 Signer creates a microservice on AWS using a Serverless Container architecture enabling you to, via IaaC, create and deploy a microservice that leverages the use of HTTP protocol to sign any file in XML format.
@@ -33,7 +35,7 @@ The proposed architecture is:
 ## Installation
 
 You can have your microservice deployed and running in three automatic steps:
-Note: Total time for this setup is around 25 minutes. Cost of this infrastructure for testing purposes is around US$ 3.50 per hour (us-east-1 / North Virginia). **You need a region where service CodeBuild is running**
+Note: Total time for this setup is around 40 minutes. Cost of this infrastructure for testing purposes is around US$ 3.50 per hour (us-east-1 / North Virginia). **You need a region where service CodeBuild is running**
 
 ### Deploy Network and CloudHSM
   
@@ -49,7 +51,7 @@ Note: Total time for this setup is around 25 minutes. Cost of this infrastructur
  
 **Details:** Just watch the show: You only need to change parameters in case the networks in the script overlap your networks. After the script finishes executing, a Step Function that starts automatically creates and configures your CloudHSM. After the Step Function finishes you can run step #2: Build Container.
 
-This script creates a Step Function with name starting with **LaunchCloudHSMCluster**. In the AWS Console, go to Step Functions and find that function. What for the execution to finish and move to the next step.
+This script creates a Step Function with name starting with **LaunchCloudHSMCluster**. In the AWS Console, go to Step Functions and find that function. Wait for the execution to finish and move to the next step.
 
  
 ### Build Container
@@ -97,7 +99,7 @@ The container executes the following operations:
  
  **IMPORTANT:** The recommended approach to delete keys from CloudHSM is to use the [CloudHSM client](https://docs.aws.amazon.com/cloudhsm/latest/userguide/install-and-configure-client-linux.html) software installed in a linux or windows virtual machine created in the same network as your CloudHSM. Certificate may be obtained from the Parameter Store and password from the Secrets Manager. This method is not implemented in the microservice because, at this moment, the CloudHSM keystore does not implement the deletion of keys. According to [this](https://docs.aws.amazon.com/cloudhsm/latest/userguide/alternative-keystore.html) documentation, deleting keys is not supported by CloudHSM Keystore. Use the CloudHSM's **key_mgmt_util** tool.
  
- After the script finishes executing there is a tab named output. That tab contains all the URLs of your microservice. You can create keys, list keys, delete keys, sign and validate a document. 
+ After the script finishes executing, still inside the CloudFormation service, you should find in the details of the stack, a tab named **output**. That tab contains all the URLs of your microservice. You can create and list keys, sign and validate a document. 
  
  ![proposed solution](images/cf-outputs.png)
 
@@ -153,17 +155,17 @@ curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: applic
 
 ### Troubleshooting HSM Installation
 
- Due to the chosen level of automation you might find problems in case the AZ automatically chosen to install the HSM doesn't have it available. Pick another AZ or region using the AZ menu in the parameters screen and give it a try. There is a select button to help you choosing the right AZ for your HSM. Some regions where this might happen are us-east-1, us-east-2, sa-east-1.
+ One of the configurations available in this step is choosing an AZ for your CloudHSM. In some cases, it is possible the service endpoint for CloudHSM is not available in the AZ chosen for your private subnet. Please, delete and recreate the Stack using a different AZ for your private subnet. To do that, delete the old stack and try again clicking in the stack button from [here](#Deploy-Network-and-CloudHSM). Once in the configuration menu, pick another AZ for your private subnet using the AZ select button. Some regions where this might happen are us-east-1, us-east-2, sa-east-1. For more information please click here.
  
- ### Troubleshooting Container Build
+### Troubleshooting Container Build
  
- In this step the CodeBuild tries to connect to github to fetch the source code of the container.  In case you don't have any credentials configured you will get the error below from CloudFormation. That means you need to configure a Git account in the Code Build. Relax..that is easy! Open the tab events in the failed cloudformation run and make sure your error looks like the one below.
+  In this step, CodeBuild tries to connect to GitHub to download the sources of the container. In case you never had configured GitHub credentials in CodeBuild you will get the error from the image below thrown by the CloudFomration. This means CodeBuild doesn't know how to connect to GitHub and you will have to configure credentials for this. In this case, relax, it is simple!
  
   ![git login failed](/images/create-build-failed.png)
  
- Setup CodeBuild to connect to Github: In the CodeBuild service pretend you are creating a new build. Choose Create Build Project. In the configuration screen there is a section named Source. Choose Github, and connect using OAuth. Once you connect press CANCEL and run the script again (validate you get the message **you are connected to Github using OAuth**). CodeBuild now knows how to fetch code from Github.
+ **Setup GitHub credentials in CodeBuild:** Go to the CodeBuild service in the AWS console. Once in the CodeBuild service menu, pretend you are creating a new build. Choose Create Build Project. In the configuration screen there is a section named Source. Choose `GitHub`, and `Connect using OAuth`. Once you connect press CANCEL and run the script again (validate you get the message **you are connected to Github using OAuth**). CodeBuild now knows how to fetch code from Github.
  
- **Delete the stack Signer container on CloudFormation and click again in the button above to run the stack**
+ **Delete the stack Signer container in CloudFormation service and recreate the Stack clicking [here](#Build-Container) to run the stack**
  
  ![setup git credentials](/images/configure-git.png)
  
@@ -185,7 +187,7 @@ curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: applic
   1. Delete the third stack: `SignerECS`
   2. Manually delete the images in the ECR Repository named `xmlsigner`
   3. Delete the second stack: `SignerContainer`
-  4. Manually delete the CloudHSM part of your CloudHSM Cluster. Wait for it to finish (menu CloudHSM in the console)
+  4. Manually delete the CloudHSM instance of your CloudHSM Cluster. Wait for it to finish (menu CloudHSM in the AWS console)
   5. Manually delete the CloudHSM Cluster
-  6. Manually delete all **inbound** and all **outbound** rules from the Security Group that has a **group name** with the following pattern: `cloudhsm-<ClusterId>`, where ClusterId is the cluster name of your recently erased HSM in the format `cluster-xxxxxxxxx`
+  6. Manually delete all **inbound** and all **outbound** rules from the Security Group that has a **group name** with the following pattern: `cloudhsm-<ClusterId>`, where ClusterId is the cluster id of your recently erased CloudHSM cluster in the format `cluster-xxxxxxxxx`
   7. Delete the third stack:  `SignerHSM`
