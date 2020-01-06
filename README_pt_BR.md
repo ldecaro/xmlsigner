@@ -105,31 +105,31 @@ O processo e assinatura é executado usando-se um certificado auto-assinado. Tud
 
 Dentro da pasta **run** deste projeto, tem um arquivo chamado **certdata.json** e você pode usá-lo para definir as propriedades que o seu certificado auto-assinado usará no momento da criação das chaves. Operar o container é bem simples e abaixo você encontrará os comandos que deverão ser usados, já validados para a sua conveniência. É possível usarmos também um Postman, porém baixando-se o projeto e executando os comandos abaixo a partir da raiz do projeto é o suficiente para que seja possível validar todas as funcionalidades do container:
  
-### Store the service URL in an environment variable:
+### Armazene a URL de serviço em uma variável de ambiente:
 (remove the / at the end of the url)
 ```
 URL=<alb-url>
 ```
 
-### List existing keys:
+### Listar as chaves existentes:
  
 ```
 curl $URL/xml/listKeys
 ```
 
-### Create keys:
+### Criar novas chaves:
 
 ```
 curl --data "@run/certdata.json" $URL/xml/create/<my-key-label> -X POST -H "Content-Type: text/plain"
 ```
 
-### Sign XML Document (using certificate w/ public key)
+### Assinar o Documento XML (usando certificado com chave pública)
 
 ```
 curl --data "@run/sample.xml" $URL/xml/sign/<my-key-label> -X POST -H "Content-Type: application/xml" >> run/signed.xml
 ```
 
-### Validate Signed Document
+### Validar documento assinado
 
 ```
 curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: application/xml"
