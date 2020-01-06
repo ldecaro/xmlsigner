@@ -10,7 +10,7 @@ Signer creates a microservice on AWS using a Serverless Container architecture e
 
 The XML Signature process uses a Cloud Hardware Secure Module ([AWS CloudHSM](https://aws.amazon.com/pt/cloudhsm/)) provisioned and configured in the Cloud. The microservice is written in Java using Amazon Corretto and cryptography process is enhanced with the use of the [Amazon Corretto Crypto Provider (ACCP)](https://aws.amazon.com/blogs/opensource/introducing-amazon-corretto-crypto-provider-accp/).
 
-Care about performance? If we consider p99 requests the Fargate Container deployed with this project can sign a 6KB document in around 15ms (Tested with a real invoice from Brazil - NF-e)
+Care about performance? If we consider p99 requests the Fargate Container deployed with this project can sign a 6KB document in around 30ms (Tested with a real invoice from Brazil - NF-e)
 
 ## Proposed Architecture
 

@@ -8,7 +8,7 @@ O Signer cria um microserviço na AWS usando uma arquitetura de containers "serv
 
 O processo de assinatura do XML usa um HSM ou módulo de segurança de "hardware" ([AWS CloudHSM](https://aws.amazon.com/pt/cloudhsm/)) provisionado e configurado na nuvem. O microserviço é escrito em Java usando o Amazon Corretto e o processo criptográfico é melhorado com o uso do [Amazon Corretto Crypto Provider (ACCP)](https://aws.amazon.com/blogs/opensource/introducing-amazon-corretto-crypto-provider-accp/).  
 
-Se preocupa com a performance? Se considerarmos 99% (p99) das requisições, o container do Fargate implantado por este projeto pode assinar um documento de 6KB em torno de 20ms (testado com uma NF-e real do Brasil).
+Se preocupa com a performance? Se considerarmos 99% (p99) das requisições, o container do Fargate implantado por este projeto pode assinar um documento de 6KB em torno de 30ms (testado com uma NF-e real do Brasil).
 
 
 ## Arquitetura Proposta
