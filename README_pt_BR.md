@@ -153,7 +153,7 @@ curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: applic
 
 ### Resolvendo Instalação do HSM
 
- Umas das configurações disponíveis neste step é a escolha da AZ para o seu CloudHSM. Em alguns casos, é possível que o endpoint do serviço do CloudHSM não esteja disponível na AZ escolhida para a sua subnet privada. Por favor, apague e recrie a Stack usando um AZ diferente para a sua subnet privada. Para fazer isto, apague a stack antiga e tente novamente usando [este](#Deploy-Network-and-CloudHSM) botão de criar Stack. Uma vez no menu de configuração, escolha outra AZ para a sua subnet privada usando o botão de seleção. Algumas regiões onde isto pode acontecer: sa-east-1, us-east-1, us-east-2.
+ Umas das configurações disponíveis neste step é a escolha da AZ para o seu CloudHSM. Em alguns casos, é possível que o endpoint do serviço do CloudHSM não esteja disponível na AZ escolhida para a sua subnet privada. Por favor, apague e recrie a Stack usando um AZ diferente para a sua subnet privada. Para fazer isto, apague a stack antiga e tente novamente usando [este](#Implantação-da-Rede-e-do-CloudHSM) botão de criar Stack. Uma vez no menu de configuração, escolha outra AZ para a sua subnet privada usando o botão de seleção. Algumas regiões onde isto pode acontecer: sa-east-1, us-east-1, us-east-2.
  
 ### Resolvendo a Criação do Container
  
@@ -163,7 +163,7 @@ curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: applic
  
  **Configurar credenciais do GitHub no CodeBuild:** Vá para o serviço do CodeBuild na sua região usando a console da AWS. Uma vez dentro do menu do CodeBuild, finja que você está criando um novo **build**. Escolha Criar Projeto de Build. Na tela de configuração tem uma seção chamada Fontes (ou Source). Escolha `GitHub`, e `Conectar using OAuth` (se tiver dúvida faça como na imagem abaixo). Uma vez conectado, pressione CANCEL e execute o script de criação da Stack do CloudFormation novamente. (valide se você visualizou a mensagem **você está conectado ao Github usando OAuth**). Agora o CodeBuild sabe como baixar os fontes do Github.
  
- **Apague a Stack Signer Container no serviço do CloudFormation e clique novamente [neste](#Build-Container) botão para rodar a Stack novamente**
+ **Apague a Stack Signer Container no serviço do CloudFormation e clique novamente [neste](#Criar-o-Container) botão para rodar a Stack novamente**
  
  ![setup git credentials](/images/configure-git.png)
  

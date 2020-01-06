@@ -155,7 +155,7 @@ curl --data "@run/signed.xml" $URL/xml/validate -X POST -H "Content-Type: applic
 
 ### Troubleshooting HSM Installation
 
- One of the configurations available in this step is choosing an AZ for your CloudHSM. In some cases, it is possible the service endpoint for CloudHSM is not available in the AZ chosen for your private subnet. Please, delete and recreate the Stack using a different AZ for your private subnet. To do that, delete the old stack and try again clicking in the stack button from [here](#Deploy-Network-and-CloudHSM). Once in the configuration menu, pick another AZ for your private subnet using the AZ select button. Some regions where this might happen are us-east-1, us-east-2, sa-east-1. For more information please click here.
+ One of the configurations available in this step is choosing an AZ for your CloudHSM. In some cases, it is possible the service endpoint for CloudHSM is not available in the AZ chosen for your private subnet. Please, delete and recreate the Stack using a different AZ for your private subnet. To do that, delete the old stack and try again clicking in the stack button from [here](#Deploy-Network-and-CloudHSM). Once in the configuration menu, pick another AZ for your private subnet using the AZ select button. Some regions where this might happen are us-east-1, us-east-2, sa-east-1.
  
 ### Troubleshooting Container Build
  
