@@ -111,6 +111,7 @@ public class XMLSigner {
 	private final String keyStoreFile		=	"KeyStoreHSM";
 	private static final String REGION		=	System.getenv("region");
 	private static final String HSM_CLUSTER_ID	=	System.getenv("ClusterId");	
+	private static final String RSA_SHA256_W3C_ID	=	"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 	
 	public XMLSigner() {
 
@@ -398,7 +399,7 @@ public class XMLSigner {
             algURI.equalsIgnoreCase(SignatureMethod.DSA_SHA1)){//"http://www.w3.org/2000/09/xmldsig#dsa-sha1")) { //"http://www.w3.org/2009/xmldsig11#dsa-sha256")) {
             return true;
         } else if (algName.equalsIgnoreCase("RSA") &&
-                   algURI.equalsIgnoreCase(SignatureMethod.RSA_SHA1)) {//"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256")) {
+        			algURI.equalsIgnoreCase(XMLSigner.RSA_SHA256_W3C_ID)) {
             return true;
         } else {
             return false;
@@ -433,7 +434,7 @@ public class XMLSigner {
 		// Create the SignedInfo
 			SignedInfo si = fac.newSignedInfo
 			    (fac.newCanonicalizationMethod(CanonicalizationMethod.INCLUSIVE_WITH_COMMENTS, (C14NMethodParameterSpec) null), 
-			     fac.newSignatureMethod(SignatureMethod.RSA_SHA1, null),
+			     fac.newSignatureMethod(XMLSigner.RSA_SHA256_W3C_ID, null),
 			     Collections.singletonList(ref));
   
 		KeyPair kp = null;
